@@ -1,3 +1,6 @@
+# Ignore all .
+.*
+
 # Ignore the build output directory
 /build/
 /bin/
