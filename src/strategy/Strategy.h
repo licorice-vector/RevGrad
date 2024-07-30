@@ -1,12 +1,12 @@
 #ifndef STRATEGY_H
 #define STRATEGY_H
 
-#include "../float/Float.h"
+#include "../tensor/Tensor.h"
 
 namespace RevGrad {
     class Strategy {
     public:
-        std::vector<Float> parameters;
+        std::vector<Tensor> parameters;
         Strategy() {}
         virtual void zero() = 0;
         virtual void update() = 0;
@@ -17,7 +17,7 @@ namespace RevGrad {
         float momentum;
         std::vector<float> velocity;
     public:
-        SGD(std::vector<Float> parameters, float learning_rate, float momentum = 0.9);
+        SGD(std::vector<Tensor> parameters, float learning_rate, float momentum = 0.9);
         void zero() override;
         void update() override;
     };

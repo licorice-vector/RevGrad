@@ -1,5 +1,7 @@
 #include <iostream>
 
+#include "../utill/Print.h"
+#include "../tensor/Tensor.h"
 #include "../model/Model.h"
 #include "../loss/Loss.h"
 #include "../strategy/Strategy.h"
@@ -42,6 +44,7 @@ int main() {
         0, 1, 
         0, 1
     });
+    X.transpose();
 
     Tensor correct = Tensor(Shape({8}), {1, 1, 1, 1, 0, 0, 0, 0});
 
@@ -50,9 +53,10 @@ int main() {
     SGD sgd(nn.get_params(), 0.1);
 
     for (int i = 0; i <= 500; i++) {
-        Tensor prediction = nn(X.transposed()).flattened();
+        Tensor prediction = nn(X);
+        prediction.flatten();
         Tensor loss = mse(prediction, correct);
-        
+
         sgd.zero();
         loss.backward();
         sgd.update();
@@ -60,7 +64,7 @@ int main() {
         if (i % 100 == 0) {
             std::cout << "prediction: " << prediction << std::endl;
             std::cout << "correct: " << correct << std::endl;
-            std::cout << "loss: " << loss[{0}].value() << std::endl;
+            std::cout << "loss: " << loss.value({0}) << std::endl;
         }
     }
     

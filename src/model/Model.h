@@ -8,11 +8,13 @@
 namespace RevGrad {
     class Model {
     public:
-        std::vector<Float> parameters;
+        std::vector<Tensor> parameters;
         Model() {}
-        std::vector<Float> get_params();
+        std::vector<Tensor> get_params();
         Tensor operator()(Tensor x);
         virtual Tensor forward(Tensor x) = 0;
+        void save_parameters(const std::string& filename);
+        void load_parameters(const std::string& filename);
     };
 
     class Linear : public Model {
@@ -23,6 +25,9 @@ namespace RevGrad {
         Tensor bias;
         Linear() {}
         Linear(Model* parent_model, int in_features, int out_features);
+        /*
+            @param x tensor of shape (features, batch size)
+        */
         Tensor forward(Tensor x) override;
     };
 }

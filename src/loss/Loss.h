@@ -16,6 +16,24 @@ namespace RevGrad {
         MSE() {}
         Tensor compute(Tensor prediction, Tensor correct) override;
     };
+
+    class SoftmaxCrossEntropyLoss : public Loss {
+    public:
+        SoftmaxCrossEntropyLoss() {}
+        Tensor compute(Tensor prediction, Tensor correct) override;
+    };
+
+    class CrossEntropyLoss : public Loss {
+    public:
+        CrossEntropyLoss() {}
+        Tensor compute(Tensor prediction, Tensor correct) override;
+    };
+
+    class NLLLoss : public Loss { // negative log likelihood loss
+    public:
+        NLLLoss() {}
+        Tensor compute(Tensor prediction, Tensor correct) override;
+    };
 }
 
 #endif

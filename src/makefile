@@ -1,40 +1,40 @@
 CXX = g++-13
-CXXFLAGS = -std=c++17 -g
+CXXFLAGS = -std=c++17 -g -O3 -march=native -funroll-loops -ftree-vectorize
 LDFLAGS = -Wl,-ld_classic
 
 # Source files for each target
-FLOAT_SOURCES = \
-	./float/Float.cpp \
-	./tests/FloatTests.cpp
-
 TENSOR_SOURCES = \
-    ./float/Float.cpp \
     ./tensor/Tensor.cpp \
+    ./utill/Print.cpp \
     ./tests/TensorTests.cpp
 
 LEARNING_SOURCES = \
-    ./float/Float.cpp \
     ./tensor/Tensor.cpp \
+    ./utill/Print.cpp \
     ./loss/Loss.cpp \
     ./strategy/Strategy.cpp \
     ./model/Model.cpp \
     ./examples/Learning.cpp
 
+MNIST_SOURCES = \
+    ./tensor/Tensor.cpp \
+    ./utill/Print.cpp \
+    ./loss/Loss.cpp \
+    ./strategy/Strategy.cpp \
+    ./model/Model.cpp \
+    ./examples/MNIST.cpp
+
 # Object files for each target
-FLOAT_OBJS = $(FLOAT_SOURCES:.cpp=.o)
 TENSOR_OBJS = $(TENSOR_SOURCES:.cpp=.o)
 LEARNING_OBJS = $(LEARNING_SOURCES:.cpp=.o)
+MNIST_OBJS = $(MNIST_SOURCES:.cpp=.o)
 
 # Targets
-FLOAT_TARGET = ./FloatTests
 TENSOR_TARGET = ./TensorTests
 LEARNING_TARGET = ./Learning
+MNIST_TARGET = ./MNIST
 
-all: $(FLOAT_TARGET) $(TENSOR_TARGET) $(LEARNING_TARGET)
-
-# Build FloatTests
-$(FLOAT_TARGET): $(FLOAT_OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $(FLOAT_OBJS)
+all: $(TENSOR_TARGET) $(LEARNING_TARGET) $(MNIST_TARGET)
 
 # Build TensorTests
 $(TENSOR_TARGET): $(TENSOR_OBJS)
@@ -44,10 +44,16 @@ $(TENSOR_TARGET): $(TENSOR_OBJS)
 $(LEARNING_TARGET): $(LEARNING_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(LEARNING_OBJS)
 
+# Build MNIST
+$(MNIST_TARGET): $(MNIST_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(MNIST_OBJS)
+
 # Rule to compile .cpp files to .o files
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 # Clean up build files
 clean:
-	rm -f $(FLOAT_TARGET) $(TENSOR_TARGET) $(LEARNING_TARGET) $(FLOAT_OBJS) $(TENSOR_OBJS) $(LEARNING_OBJS)
+	rm -f \
+        $(TENSOR_TARGET) $(LEARNING_TARGET) $(MNIST_TARGET) \
+        $(TENSOR_OBJS) $(LEARNING_OBJS) $(MNIST_OBJS)

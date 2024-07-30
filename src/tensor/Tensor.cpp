@@ -1,350 +1,768 @@
-#include <iostream>
-#include <cassert>
-
 #include "Tensor.h"
 
 namespace RevGrad {
-    int Shape::size() const {
-        return std::accumulate(dimensions.begin(), dimensions.end(), 1, std::multiplies<int>());
-    }
-
-    int Shape::dim() const {
-        return dimensions.size();
-    }
-
-    int Shape::operator[](int idx) const {
-        return dimensions[idx];
-    }
-
-    std::vector<int> Shape::unravel_index(int idx) const {
-        std::vector<int> idxs(dim());
-        int r = idx;
-        for (int i = dim() - 1; i >= 0; i--) {
-            idxs[i] = r % dimensions[i];
-            r /= dimensions[i];
+    namespace ViewUtill {
+        int shape_size(Shape shape) {
+            return std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
         }
-        assert(r == 0); // index out of range
-        return idxs;
-    }
 
-    bool Shape::operator==(const Shape& other) const {
-        return dimensions == other.dimensions;
-    }
-
-    bool Shape::operator!=(const Shape& other) const {
-        return dimensions != other.dimensions;
-    }
-
-    bool Shape::broadcastable(const Shape& other) const {
-        int i = dim() - 1;
-        int j = other.dim() - 1;
-        while (i >= 0 && j >= 0) {
-            if (dimensions[i] != other[j] && dimensions[i] != 1 && other[j] != 1) {
-                return false;
+        Strides strides_from_shape(Shape shape) {
+            int d = shape.size();
+            Strides strides(d);
+            int stride = 1;
+            for (int i = d - 1; i >= 0; i--) {
+                strides[i] = stride;
+                stride *= shape[i];
             }
-            i--, j--;
+            return strides;
         }
-        while (j >= 0) {
-            if (other[j] != 1) {
-                return false;
+
+        Shape broadcast_shape(const Shape& a, const Shape& b) {
+            int a_size = a.size();
+            int b_size = b.size();
+            int n = std::max(a_size, b_size);
+            Shape c(n);
+            int i = a_size - 1;
+            int j = b_size - 1;
+            int k = n - 1;
+            while (i >= 0 && j >= 0) {
+                assert(a[i] == b[j] || a[i] == 1 || b[j] == 1);
+                c[k] = std::max(a[i], b[j]);
+                i--, j--, k--;
             }
-            j--;
-        }
-        while (i >= 0) {
-            if (dimensions[i] != 1) {
-                return false;
+            while (i >= 0) {
+                c[k] = a[i];
+                i--, k--;
             }
-            i--;
+            while (j >= 0) {
+                c[k] = b[j];
+                j--, k--;
+            }
+            return c;
         }
-        return true;
+
+        Indices unravel(int index, const Shape& shape, const Strides& strides) {
+            int size = shape.size();
+            Indices indices(size);
+            for (int i = 0; i < size; i++) {
+                indices[i] = (index / strides[i]) % shape[i];
+            }
+            return indices;
+        }
+
+        int ravel(const Indices& indices, const Strides& strides) {
+            int offset = 0;
+            for (int i = 0; i < indices.size(); ++i) {
+                offset += indices[i] * strides[i];
+            }
+            return offset;
+        }
+
+        Indices reshape_indices(const Indices& indices, const Shape& shape) {
+            int size = shape.size();
+            Indices reshaped_indices(size);
+            int size_delta = indices.size() - size;
+            for (int i = 0; i < size; i++) {
+                reshaped_indices[i] = indices[size_delta + i] % shape[i];
+            }
+            return reshaped_indices;
+        }
     }
 
-    Shape Shape::broadcast_shape(const Shape& a, const Shape& b) {
-        int n = std::max(a.dim(), b.dim());
-        std::vector<int> dimensions(n);
-        int i = a.dim() - 1;
-        int j = b.dim() - 1;
-        int k = n - 1;
-        while (i >= 0 && j >= 0) {
-            dimensions[k] = std::max(a[i], b[j]);
-            i--, j--, k--;
-        }
-        while (i >= 0) {
-            dimensions[k] = a[i];
-            i--, k--;
-        }
-        while (j >= 0) {
-            dimensions[k] = b[j];
-            j--, k--;
-        }
-        return Shape(dimensions.begin(), dimensions.end());
+    Node::Node(float value) 
+        : shape(Shape(1, 1))
+    {
+        values = Values(1, value);
+        strides = ViewUtill::strides_from_shape(shape);
+        grads = Gradients(1);
     }
 
-    std::ostream& operator<<(std::ostream& os, const Shape& shape) {
-        os << "(";
-        for (int i = 0; i < shape.dim(); i++) {
-            os << shape[i];
-            if (i < shape.dim() - 1) {
-                os << ", ";
+    Node::Node(Shape shape, float value) 
+        : shape(shape), 
+          strides(ViewUtill::strides_from_shape(shape))
+    {
+        int size = ViewUtill::shape_size(shape);
+        values = Values(size, value);
+        grads = Gradients(size);
+    }
+
+    Node::Node(Shape shape, Values values) 
+        : values(values),
+          shape(shape), 
+          strides(ViewUtill::strides_from_shape(shape)),
+          grads(Gradients((int)values.size()))
+    {
+        assert(ViewUtill::shape_size(shape) == (int)values.size());
+    }
+
+    namespace TensorUtill {
+        Tensor addition(const Tensor& u, const Tensor& v) {
+            Shape shape = ViewUtill::broadcast_shape(u.shape(), v.shape());
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                float u_value = u.value(ViewUtill::reshape_indices(indices, u.shape()));
+                float v_value = v.value(ViewUtill::reshape_indices(indices, v.shape()));
+                w.values()[i] = u_value + v_value;
+            }
+            w.add_edge(u), w.add_edge(v);
+            return w;
+        }
+
+        void addition_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 2);
+            Tensor u = w.edges()[0];
+            Tensor v = w.edges()[1];
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                Indices u_indices = ViewUtill::reshape_indices(indices, u.shape());
+                Indices v_indices = ViewUtill::reshape_indices(indices, v.shape());
+                u.grad(u_indices) += w.grads()[i];
+                v.grad(v_indices) += w.grads()[i];
             }
         }
-        os << ")";
-        return os;
+
+        Tensor subtraction(const Tensor& u, const Tensor& v) {
+            Shape shape = ViewUtill::broadcast_shape(u.shape(), v.shape());
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                float u_value = u.value(ViewUtill::reshape_indices(indices, u.shape()));
+                float v_value = v.value(ViewUtill::reshape_indices(indices, v.shape()));
+                w.values()[i] = u_value - v_value;
+            }
+            w.add_edge(u), w.add_edge(v);
+            return w;
+        }
+
+        void subtraction_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 2);
+            Tensor u = w.edges()[0];
+            Tensor v = w.edges()[1];
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                Indices u_indices = ViewUtill::reshape_indices(indices, u.shape());
+                Indices v_indices = ViewUtill::reshape_indices(indices, v.shape());
+                u.grad(u_indices) += w.grads()[i];
+                v.grad(v_indices) -= w.grads()[i];
+            }
+        }
+
+        Tensor multiplication(const Tensor& u, const Tensor& v) {
+            Shape shape = ViewUtill::broadcast_shape(u.shape(), v.shape());
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                float u_value = u.value(ViewUtill::reshape_indices(indices, u.shape()));
+                float v_value = v.value(ViewUtill::reshape_indices(indices, v.shape()));
+                w.values()[i] = u_value * v_value;
+            }
+            w.add_edge(u), w.add_edge(v);
+            return w;
+        }
+
+        void multiplication_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 2);
+            Tensor u = w.edges()[0];
+            Tensor v = w.edges()[1];
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                Indices u_indices = ViewUtill::reshape_indices(indices, u.shape());
+                Indices v_indices = ViewUtill::reshape_indices(indices, v.shape());
+                u.grad(u_indices) += w.grads()[i] * v.value(v_indices);
+                v.grad(v_indices) += w.grads()[i] * u.value(u_indices);
+            }
+        }
+
+        Tensor division(const Tensor& u, const Tensor& v) {
+            Shape shape = ViewUtill::broadcast_shape(u.shape(), v.shape());
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                float u_value = u.value(ViewUtill::reshape_indices(indices, u.shape()));
+                float v_value = v.value(ViewUtill::reshape_indices(indices, v.shape()));
+                w.values()[i] = u_value / v_value;
+            }
+            w.add_edge(u), w.add_edge(v);
+            return w;
+        }
+
+        void division_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 2);
+            Tensor u = w.edges()[0];
+            Tensor v = w.edges()[1];
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                Indices u_indices = ViewUtill::reshape_indices(indices, u.shape());
+                Indices v_indices = ViewUtill::reshape_indices(indices, v.shape());
+                float u_value = u.value(u_indices);
+                float v_value = v.value(v_indices);
+                u.grad(u_indices) += w.grads()[i] * (1.0f / v_value);
+                v.grad(v_indices) += w.grads()[i] * (-u_value / (v_value * v_value));
+            }
+        }
+
+        Tensor sum(const Tensor& u, int axis) {
+            if (axis == -1) {
+                float sum = 0.0f;
+                for (int i = 0; i < u.size(); i++) {
+                    sum += u.values()[i];
+                }
+                Tensor w(sum);
+                w.meta_data()["axis"] = axis;
+                w.add_edge(u);
+                return w;
+            }
+            Shape shape = u.shape();
+            shape.erase(shape.begin() + axis);
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                indices.insert(indices.begin() + axis, 0);
+                float sum = 0.0f;
+                for (int j = 0; j < u.shape()[axis]; j++) {
+                    indices[axis] = j;
+                    float value = u.value(indices);
+                    sum += value;
+                }
+                indices.erase(indices.begin() + axis);
+                w.values()[ViewUtill::ravel(indices, w.strides())] = sum;
+            }
+            if (shape.size() == 0) {
+                assert(w.size() == 1);
+                w.shape() = Shape({1});
+                w.strides() = ViewUtill::strides_from_shape(w.shape());
+            }
+            w.meta_data()["axis"] = axis;
+            w.add_edge(u);
+            return w;
+        }
+
+        void sum_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            assert(w.meta_data().count("axis"));
+            int axis = w.meta_data().at("axis");
+            if (axis == -1) {
+                assert(w.size() == 1);
+                for (int i = 0; i < u.size(); i++) {
+                    u.grads()[i] += w.grads()[0];
+                }
+                return;
+            }
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                indices.insert(indices.begin() + axis, 0);
+                for (int j = 0; j < u.shape()[axis]; j++) {
+                    indices[axis] = j;
+                    u.grad(indices) += w.grads()[i];
+                }
+            }
+        }
+
+        Tensor max(const Tensor& u, int axis) {
+            Shape shape = u.shape();
+            shape.erase(shape.begin() + axis);
+            Tensor w(shape);
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                indices.insert(indices.begin() + axis, 0);
+                float max_value = std::numeric_limits<float>::lowest();
+                for (int j = 0; j < u.shape()[axis]; j++) {
+                    indices[axis] = j;
+                    float value = u.value(indices);
+                    if (value > max_value) {
+                        max_value = value;
+                    }
+                }
+                indices.erase(indices.begin() + axis);
+                w.values()[ViewUtill::ravel(indices, w.strides())] = max_value;
+            }
+            if (shape.size() == 0) {
+                assert(w.size() == 1);
+                w.shape() = Shape({1});
+                w.strides() = ViewUtill::strides_from_shape(w.shape());
+            }
+            w.meta_data()["axis"] = axis;
+            w.add_edge(u);
+            return w;
+        }
+
+        void max_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            assert(w.meta_data().count("axis"));
+            int axis = w.meta_data().at("axis");
+            Tensor u = w.edges()[0];
+            for (int i = 0; i < w.size(); i++) {
+                Indices indices = ViewUtill::unravel(i, w.shape(), w.strides());
+                indices.insert(indices.begin() + axis, 0);
+                float max_value = w.values()[i];
+                float cnt = 0;
+                for (int j = 0; j < u.shape()[axis]; j++) {
+                    indices[axis] = j;
+                    if (u.value(indices) == max_value) {
+                        cnt++;
+                    }
+                }
+                for (int j = 0; j < u.shape()[axis]; j++) {
+                    indices[axis] = j;
+                    if (u.value(indices) == max_value) {
+                        u.grad(indices) += w.grads()[i] / cnt;
+                    }
+                }
+            }
+        }
+
+        Tensor exp(const Tensor& u) {
+            Tensor w(u.shape());
+            for (int i = 0; i < u.size(); i++) {
+                w.values()[i] = std::exp(u.values()[i]);
+            }
+            w.add_edge(u);
+            return w;
+        }
+
+        void exp_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            for (int i = 0; i < u.size(); i++) {
+                u.grads()[i] += w.grads()[i] * std::exp(u.values()[i]);
+            }
+        }
+
+        Tensor log(const Tensor& u) {
+            Tensor w(u.shape());
+            for (int i = 0; i < u.size(); i++) {
+                float value = u.values()[i];
+                assert(!(value != value)); // nan
+                assert(value != 0.0f);
+                assert(value > 0.0f);
+                w.values()[i] = std::log(value);
+            }
+            w.add_edge(u);
+            return w;
+        }
+
+        void log_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            for (int i = 0; i < u.size(); i++) {
+                u.grads()[i] += w.grads()[i] * (1 / u.values()[i]);
+            }
+        }
+
+        Tensor relu(const Tensor& u) {
+            Tensor w(u.shape());
+            for (int i = 0; i < u.size(); i++) {
+                w.values()[i] = std::max(0.0f, u.values()[i]);
+            }
+            w.add_edge(u);
+            return w;
+        }
+
+        void relu_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            for (int i = 0; i < u.size(); i++) {
+                u.grads()[i] += w.grads()[i] * (u.values()[i] > 0.0f ? 1.0f : 0.0f);
+            }
+        }
+
+        Tensor sigmoid(const Tensor& u) {
+            Tensor w(u.shape());
+            for (int i = 0; i < u.size(); i++) {
+                float value = u.values()[i];
+                if (0 < value) {
+                    w.values()[i] = 1.0f / (1.0f + std::exp(-value));
+                } else {
+                    float exp_value = std::exp(value);
+                    w.values()[i] = exp_value / (1.0f + exp_value);
+                }
+            }
+            w.add_edge(u);
+            return w;
+        }
+
+        void sigmoid_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            for (int i = 0; i < u.size(); i++) {
+                float value = w.values()[i];
+                u.grads()[i] += w.grads()[i] * (value * (1 - value));
+            }
+        }
+
+        Tensor softmax(const Tensor& u) {
+            Tensor mx = Tensor::max(u);
+            Tensor exp = Tensor::exp(u - mx);
+            Tensor s = exp / Tensor::sum(exp, 0);
+            Tensor w(u.shape());
+            w.values() = s.values();
+            w.add_edge(u);
+            return w;
+        }
+
+        void softmax_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            Shape shape = u.shape();
+            assert((int)shape.size() == 2); // {features, batch_size}
+            for (int k = 0; k < shape[1]; k++) { // batch_size
+                for (int i = 0; i < shape[0]; i++) { // features
+                    float value_i = w.values()[i * shape[1] + k];
+                    for (int j = 0; j < shape[0]; j++) { // features
+                        float value_j = w.values()[j * shape[1] + k];
+                        u.grads()[i * shape[1] + k] += w.grads()[j * shape[1] + k] * (value_i * ((i == j) - value_j));
+                    }
+                }
+            }
+        }
+
+        Tensor log_softmax(const Tensor& u) {
+            Tensor mx = Tensor::max(u);
+            Tensor s = u - mx - Tensor::log(Tensor::sum(Tensor::exp(u - mx), 0));
+            Tensor w(u.shape());
+            assert(s.shape() == w.shape());
+            w.values() = s.values();
+            w.add_edge(u);
+            return w;
+        }
+
+        void log_softmax_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 1);
+            Tensor u = w.edges()[0];
+            Tensor mx = Tensor::max(u);
+            Tensor exp = Tensor::exp(u - mx);
+            Tensor s = exp / Tensor::sum(exp, 0);
+            Shape shape = u.shape();
+            assert((int)shape.size() == 2);
+            for (int k = 0; k < shape[1]; k++) { // batch_size
+                for (int i = 0; i < shape[0]; i++) { // features
+                    float value_i = s.values()[i * shape[1] + k];
+                    for (int j = 0; j < shape[0]; j++) { // features
+                        u.grads()[i * shape[1] + k] += w.grads()[j * shape[1] + k] * ((i == j) - value_i);
+                    }
+                }
+            }
+        }
+
+        Tensor matmul(const Tensor& u, const Tensor& v) {
+            Shape shape = Shape({u.shape()[0], v.shape()[1]});
+            Tensor w(shape);
+            for (int i = 0; i < shape[0]; i++) {
+                for (int j = 0; j < shape[1]; j++) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < u.shape()[1]; k++) {
+                        sum += u.values()[i * u.shape()[1] + k] * v.values()[k * v.shape()[1] + j];
+                    }
+                    w.values()[i * shape[1] + j] = sum;
+                }
+            }
+            w.add_edge(u), w.add_edge(v);
+            return w;
+        }
+
+        void matmul_backward_fn(const Tensor& w) {
+            assert((int)w.edges().size() == 2);
+            Tensor u = w.edges()[0];
+            Tensor v = w.edges()[1];
+            Shape u_shape = u.shape();
+            Shape v_shape = v.shape();
+            for (int i = 0; i < w.shape()[0]; i++) {
+                for (int j = 0; j < w.shape()[1]; j++) {
+                    for (int k = 0; k < u_shape[1]; k++) {
+                        u.grads()[i * u_shape[1] + k] += (
+                            w.grads()[i * w.shape()[1] + j] * 
+                            v.values()[k * v_shape[1] + j]
+                        );
+                        v.grads()[k * v_shape[1] + j] += (
+                            w.grads()[i * w.shape()[1] + j] * 
+                            u.values()[i * u_shape[1] + k]
+                        );
+                    }
+                }
+            }
+        }
     }
 
     std::random_device Tensor::rd = std::random_device();
     std::mt19937 Tensor::rng = std::mt19937(rd());
-
-    std::vector<float> Tensor::random_vector(int n) {
+    std::vector<float> Tensor::random_vector(int n, int in_degree) {
         std::vector<float> r(n);
-        std::uniform_real_distribution<float> uniform_dist(0.0f, 0.1f);
-        for (int i = 0; i < n; i++) {
-            r[i] = uniform_dist(rng);
-        }
-        return r;
-    }
-
-    std::vector<float> Tensor::random_vector(int n, int fan_in) {
-        std::vector<float> r(n);
-        std::normal_distribution<float> he_dist(0.0f, std::sqrt(2.0f / fan_in));
+        std::normal_distribution<float> he_dist(0.0f, std::sqrt(2.0f / in_degree));
         for (int i = 0; i < n; i++) {
             r[i] = he_dist(rng);
         }
         return r;
     }
 
-    Tensor::Tensor() {
-        this->shape = Shape({0});
-    }
+    Tensor::Tensor(float value) : _data(std::make_shared<Node>(value)) {}
+    Tensor::Tensor(Shape shape, float value) : _data(std::make_shared<Node>(shape, value)) {}
+    Tensor::Tensor(Shape shape, Values values) : _data(std::make_shared<Node>(shape, values)) {}
 
-    Tensor::Tensor(Shape shape, float init_value) {
-        this->shape = shape;
-        for (int i = 0; i < shape.size(); i++) {
-            this->data.push_back(Float(init_value));
+    Tensor Tensor::from_csv(const std::string& filename) {
+        std::ifstream file(filename);
+        assert(file.is_open());
+        std::vector<std::vector<float>> rows;
+        std::string line;    
+        while (std::getline(file, line)) {
+            std::stringstream ss(line);
+            std::string s;
+            std::vector<float> row;
+            while (std::getline(ss, s, ',')) {
+                row.push_back(std::stoi(s));
+            }
+            rows.push_back(row);
         }
-    }
-
-    Tensor::Tensor(Shape shape, std::vector<float> values) {
-        assert(shape.size() == values.size());
-        this->shape = shape;
-        for (int i = 0; i < shape.size(); i++) {
-            this->data.push_back(Float(values[i]));
+        file.close();
+        for (int i = 1; i < (int)rows.size(); i++) {
+            assert(rows[i].size() == rows[0].size());
         }
-    }
-
-    Tensor::Tensor(const Tensor& other) {
-        this->data = other.data;
-        this->shape = other.shape;
-    }
-
-    Tensor::Tensor(const Float& float_data) {
-        this->shape = Shape({1});
-        this->data.push_back(float_data);
-    }
-
-    Tensor Tensor::random(Shape shape) {
-        return Tensor(shape, random_vector(shape.size()));
-    }
-
-    Tensor Tensor::random(Shape shape, int fan_in) {
-        return Tensor(shape, random_vector(shape.size(), fan_in));
-    }
-
-    const Float Tensor::operator[](std::vector<int> idxs) const {
-        int d = shape.dim();
-        assert(idxs.size() == d);
-        int flat_idx = 0, mult = 1, dim = d;
-        for (int i = dim - 1; i >= 0; i--) {
-            flat_idx += idxs[i] * mult;
-            mult *= shape[i];
-        }
-        return this->data[flat_idx];
-    }
-
-    std::vector<float> Tensor::get_values() const {
         std::vector<float> values;
-        for (int i = 0; i < this->shape.size(); i++) {
-            values.push_back(this->data[i].value());
+        for (int i = 0; i < (int)rows.size(); i++) {
+            for (auto value : rows[i]) {
+                values.push_back(value);
+            }
         }
-        return values;
+        return Tensor(Shape({(int)rows.size(), (int)rows[0].size()}), values);
     }
 
-    void Tensor::set(std::vector<int> idxs, float new_value) {
-        int d = shape.dim();
-        assert(idxs.size() == d);
-        int flat_idx = 0, mult = 1, dim = d;
-        for (int i = dim - 1; i >= 0; i--) {
-            flat_idx += *(idxs.begin() + i) * mult;
-            mult *= shape[i];
-        }
-        this->data[flat_idx] = Float(new_value);
+    Tensor Tensor::random(Shape shape, int in_degree) {
+        return Tensor(shape, random_vector(ViewUtill::shape_size(shape), in_degree));
     }
 
-    Tensor Tensor::flattened() {
-        return reshaped(Shape({this->shape.size()}));
+    const Data& Tensor::data() const { return _data; }
+
+    Tensor Tensor::clone() {
+        Tensor tensor;
+        tensor.values() = values();
+        tensor.shape() = shape();
+        tensor.strides() = strides();
+        tensor.grads() = grads();
+        tensor.edges() = edges();
+        tensor.backward_fn() = backward_fn();
+        return tensor;
+    }
+
+    Values& Tensor::values() { return _data->values; }
+    const Values& Tensor::values() const { return _data->values; }
+    Shape& Tensor::shape() { return _data->shape; }
+    const Shape& Tensor::shape() const { return _data->shape; }
+    Strides& Tensor::strides() { return _data->strides; }
+    const Strides& Tensor::strides() const { return _data->strides; }
+    Gradients& Tensor::grads() { return _data->grads; }
+    const Gradients& Tensor::grads() const { return _data->grads; }
+    Edges& Tensor::edges() { return _data->edges; }
+    const Edges& Tensor::edges() const { return _data->edges; }
+    BackwardFn& Tensor::backward_fn() { return _data->backward_fn; }
+    const BackwardFn& Tensor::backward_fn() const { return _data->backward_fn; }
+    MetaData& Tensor::meta_data() { return _data->meta_data; }
+    const MetaData& Tensor::meta_data() const { return _data->meta_data; }
+
+    float& Tensor::value(const Indices& indices) {
+        return values()[ViewUtill::ravel(indices, strides())];
+    }
+    const float& Tensor::value(const std::vector<int>& indices) const {
+        return values()[ViewUtill::ravel(indices, strides())];
+    }
+    float& Tensor::grad(const Indices& indices) {
+        return grads()[ViewUtill::ravel(indices, strides())];
+    }
+    const float& Tensor::grad(const std::vector<int>& indices) const {
+        return grads()[ViewUtill::ravel(indices, strides())];
+    }
+
+    void Tensor::add_edge(const Tensor& tensor) { _data->edges.push_back(tensor); }
+
+    bool Tensor::operator<(const Tensor& other) const { return _data < other._data; }
+    
+    Tensor operator+(const Tensor& u, const Tensor& v) {
+        Tensor w = TensorUtill::addition(u, v);
+        w.backward_fn() = TensorUtill::addition_backward_fn;
+        return w;
+    }
+
+    Tensor operator-(const Tensor& u, const Tensor& v) {
+        Tensor w = TensorUtill::subtraction(u, v);
+        w.backward_fn() = TensorUtill::subtraction_backward_fn;
+        return w;
+    }
+
+    Tensor operator*(const Tensor& u, const Tensor& v) {
+        Tensor w = TensorUtill::multiplication(u, v);
+        w.backward_fn() = TensorUtill::multiplication_backward_fn;
+        return w;
+    }
+
+    Tensor operator/(const Tensor& u, const Tensor& v) {
+        Tensor w = TensorUtill::division(u, v);
+        w.backward_fn() = TensorUtill::division_backward_fn;
+        return w;
+    }
+
+    Tensor& Tensor::operator+=(const Tensor& other) { return *this = *this + other; }
+    Tensor& Tensor::operator-=(const Tensor& other) { return *this = *this - other; }
+    Tensor& Tensor::operator*=(const Tensor& other) { return *this = *this * other; }
+    Tensor& Tensor::operator/=(const Tensor& other) { return *this = *this / other; }
+    Tensor Tensor::operator-() const { return Tensor() - *this; }
+
+    Tensor Tensor::sum(const Tensor& u, int axis) {
+        Tensor w = TensorUtill::sum(u, axis);
+        w.backward_fn() = TensorUtill::sum_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::mean(const Tensor& u) {
+        return Tensor::sum(u) / float(u.size());
+    }
+
+    Tensor Tensor::max(const Tensor& u, int axis) {
+        assert(axis >= 0 && axis < (int)u.shape().size());
+        Tensor w = TensorUtill::max(u, axis);
+        w.backward_fn() = TensorUtill::max_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::exp(const Tensor& u) {
+        Tensor w = TensorUtill::exp(u);
+        w.backward_fn() = TensorUtill::exp_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::log(const Tensor& u) {
+        Tensor w = TensorUtill::log(u);
+        w.backward_fn() = TensorUtill::log_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::relu(const Tensor& u) {
+        Tensor w = TensorUtill::relu(u);
+        w.backward_fn() = TensorUtill::relu_backward_fn;
+        return w;
     }
     
-    Tensor Tensor::reshaped(const Shape& shape) {
-        assert(this->shape.size() == shape.size());
-        Tensor x = *this;
-        x.shape = shape;
-        return x;
+    Tensor Tensor::sigmoid(const Tensor& u) {
+        Tensor w = TensorUtill::sigmoid(u);
+        w.backward_fn() = TensorUtill::sigmoid_backward_fn;
+        return w;
     }
 
-    Tensor Tensor::transposed() const {
-        assert(this->shape.dim() == 2);
-        int rows = this->shape[0];
-        int cols = this->shape[1];
-        Tensor transposed(Shape({cols, rows}), 0.0);
-        for (int i = 0; i < rows; i++) {
-            for (int j = 0; j < cols; j++) {
-                transposed.data[j * rows + i] = this->data[i * cols + j];
+    Tensor Tensor::softmax(const Tensor& u) {
+        assert((int)u.shape().size() == 2); // {features, batch_size}
+        Tensor w = TensorUtill::softmax(u);
+        w.backward_fn() = TensorUtill::softmax_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::log_softmax(const Tensor& u) {
+        assert((int)u.shape().size() == 2); // {features, batch_size}
+        Tensor w = TensorUtill::log_softmax(u);
+        w.backward_fn() = TensorUtill::log_softmax_backward_fn;
+        return w;
+    }
+
+    Tensor Tensor::matmul(const Tensor& u, const Tensor& v) {
+        assert((int)u.shape().size() == 2 && (int)v.shape().size() == 2);
+        assert(u.shape()[1] == v.shape()[0]);
+        Tensor w = TensorUtill::matmul(u, v);
+        w.backward_fn() = TensorUtill::matmul_backward_fn;
+        return w;
+    }
+
+    int Tensor::size() const {
+        return ViewUtill::shape_size(shape());
+    }
+
+    void Tensor::reshape(const Shape& shape) {
+        this->shape() = shape;
+        strides() = ViewUtill::strides_from_shape(this->shape());
+    }
+
+    void Tensor::flatten() {
+        Shape shape({size()});
+        this->shape() = shape;
+        strides() = ViewUtill::strides_from_shape(this->shape());
+    }
+
+    void Tensor::transpose() {
+        assert((int)this->shape().size() == 2);
+        Shape shape = {this->shape()[1], this->shape()[0]};
+        int n = size();
+        Values values(n);
+        Gradients grads(n);
+        Strides strides = ViewUtill::strides_from_shape(shape);
+        for (int i = 0; i < this->shape()[0]; i++) {
+            for (int j = 0; j < this->shape()[1]; j++) {
+                float value =this->values()[i * this->strides()[0] + j * this->strides()[1]];
+                float grad =this->grads()[i * this->strides()[0] + j * this->strides()[1]];
+                values[j * strides[0] + i * strides[1]] = value;
+                grads[j * strides[0] + i * strides[1]] = grad;
             }
         }
-        return transposed;
+        this->shape() = shape;
+        this->values() = values;
+        this->grads() = grads;
+        this->strides() = strides;
     }
 
-    Tensor operator+(const Tensor& a, const Tensor& b) {
-        Shape shape = Shape::broadcast_shape(a.shape, b.shape);
-        assert(shape.broadcastable(a.shape));
-        assert(shape.broadcastable(b.shape));
-        Tensor c(shape);
-        for (int i = 0; i < c.shape.size(); i++) {
-            c.data[i] = a.data[i % a.shape.size()] + b.data[i % b.shape.size()];
-        }
-        return c;
-    }
-
-    Tensor operator*(const Tensor& a, const Tensor& b) {
-        Shape shape = Shape::broadcast_shape(a.shape, b.shape);
-        assert(shape.broadcastable(a.shape));
-        assert(shape.broadcastable(b.shape));
-        Tensor c(shape);
-        for (int i = 0; i < c.shape.size(); i++) {
-            c.data[i] = a.data[i % a.shape.size()] * b.data[i % b.shape.size()];
-        }
-        return c;
-    }
-
-    Tensor Tensor::matmul(const Tensor& a, const Tensor& b) {
-        Shape shape_a = a.shape;
-        Shape shape_b = b.shape;
-        if (shape_a.dim() == 1) {
-            shape_a = Shape({1, shape_a[0]});
-        }
-        if (shape_b.dim() == 1) {
-            shape_b = Shape({shape_b[0], 1});
-        }
-        assert(shape_a.dim() == 2 && shape_b.dim() == 2);
-        assert(shape_a[1] == shape_b[0]);
-        int rows_a = shape_a[0];
-        int cols_a = shape_a[1];
-        int cols_b = shape_b[1];
-        Tensor c(Shape({rows_a, cols_b}), 0.0);
-        for (int i = 0; i < rows_a; i++) {
-            for (int j = 0; j < cols_b; j++) {
-                Float sum(0.0f);
-                for (int k = 0; k < cols_a; k++) {
-                    sum = sum + a.data[i * cols_a + k] * b.data[k * cols_b + j];
-                }
-                c.data[i * cols_b + j] = sum;
-            }
-        }
-        return c;
-    }
-
-    Tensor Tensor::exp(const Tensor& x) {
-        int n = x.shape.size();
-        Tensor y(x.shape, 0.0);
+    Tensor Tensor::slice(const std::vector<std::pair<int, int>>& ranges) const {
+        int n = this->shape().size();
+        assert(n == (int)ranges.size());
+        Shape shape(n);
         for (int i = 0; i < n; i++) {
-            y.data[i] = Float::exp(x.data[i]);
+            auto [start, end] = ranges[i];
+            assert(start < this->shape()[i] && end <= this->shape()[i] && start < end);
+            shape[i] = end - start;
         }
-        return y;
-    }
-
-    Tensor Tensor::relu(const Tensor& x) {
-        int n = x.shape.size();
-        Tensor y(x.shape, 0.0);
-        for (int i = 0; i < n; i++) {
-            y.data[i] = Float::relu(x.data[i]);
-        }
-        return y;
-    }
-
-    Tensor Tensor::softmax(const Tensor& x) {
-        assert(x.shape.dim() == 2); // ensure shape is (features, batch_size)
-        int features = x.shape[0];
-        int batch_size = x.shape[1];
-        Tensor y(x.shape, 0.0);
-        for (int b = 0; b < batch_size; b++) {
-            std::vector<Float> exp_data(features);
-            Float exp_sum(0.0f);
-            for (int f = 0; f < features; f++) {
-                exp_data[f] = Float::exp(x.data[f * batch_size + b]);
-                exp_sum = exp_sum + exp_data[f];
+        Tensor tensor(shape);
+        int size = tensor.size();
+        for (int i = 0; i < size; i++) {
+            Indices indices = ViewUtill::unravel(i, tensor.shape(), tensor.strides());
+            for (int j = 0; j < n; j++) {
+                auto [start, _] = ranges[j];
+                indices[j] += start;
             }
-            for (int f = 0; f < features; f++) {
-                y.data[f * batch_size + b] = exp_data[f] / exp_sum;
-            }
+            tensor.values()[i] = value(indices);
         }
-        return y;
-    }
-
-    Tensor Tensor::sigmoid(const Tensor& x) {
-        int n = x.shape.size();
-        Tensor y(x.shape, 0.0);
-        for (int i = 0; i < n; i++) {
-            Float data = x.data[i];
-            if (0 < data.value()) {
-                y.data[i] = Float(1.0) / (Float(1.0) + Float::exp(-data));
-            } else {
-                Float exp_val = Float::exp(data);
-                y.data[i] = exp_val / (Float(1.0) + exp_val);
-            }
-        }
-        return y;
-    }
-
-    void Tensor::backward(const std::vector<float>& gradient) {
-        int n = shape.size();
-        for (int i = 0; i < n; i++) {
-            data[i].backward(gradient[i]);
-        }
+        return tensor;
     }
 
     void Tensor::backward() {
-        this->backward(std::vector<float>(this->shape.size(), 1));
-    }
-
-    std::ostream& operator<<(std::ostream& os, const Tensor& x) {
-        os << "Tensor(shape=" << x.shape << ", data=";
-        const std::vector<float> values = x.get_values();
-        int dimensions = x.shape.dim();
-        std::function<void(int, int)> print_tensor = [&] (int dim, int offset) {
-            if (dim == dimensions - 1) {
-                os << "[";
-                for (int i = 0; i < x.shape[dim]; i++) {
-                    os << values[offset + i];
-                    if (i < x.shape[dim] - 1) {
-                        os << ", ";
-                    }
-                }
-                os << "]";
-            } else {
-                os << "[";
-                for (int i = 0; i < x.shape[dim]; i++) {
-                    if (0 < i) {
-                        os << ", ";
-                        for (int j = 0; j <= dim; j++) {
-                            os << " ";
-                        }
-                    }
-                    print_tensor(dim + 1, offset + i * x.shape.size() / x.shape[dim]);
-                }
-                os << "])";
+        grads() = std::vector<float>(grads().size(), 1.0f);
+        std::map<Tensor, std::vector<Tensor>> adj;
+        std::queue<Tensor> Q;
+        Q.push(*this);
+        std::set<Tensor> S;
+        while (!Q.empty()) {
+            Tensor u = Q.front();
+            Q.pop();
+            if (S.count(u)) {
+                continue;
             }
+            S.insert(u);
+            for (Tensor v : u.edges()) {
+                adj[u].push_back(v);
+                Q.push(v);
+            }
+        }
+        S.clear();
+        std::vector<Tensor> order;
+        std::function<void(Tensor)> topsort;
+        topsort = [&topsort, &adj, &S, &order] (Tensor u) -> void {
+            S.insert(u);
+            for (auto v : adj[u]) {
+                if (!S.count(v)) {
+                    topsort(v);
+                }
+            }
+            order.push_back(u);
         };
-        print_tensor(0, 0);
-        return os;
+        topsort(*this);
+        std::reverse(order.begin(), order.end());
+        for (Tensor u : order) {
+            if (u.backward_fn()) {
+                u.backward_fn()(u);
+            }
+        }
     }
 }

@@ -1,6 +1,3 @@
-#include <cassert>
-#include <iostream>
-
 #include "Loss.h"
 
 namespace RevGrad {
@@ -9,16 +6,22 @@ namespace RevGrad {
     }
 
     Tensor MSE::compute(Tensor prediction, Tensor correct) {
-        assert(prediction.shape.size() == correct.shape.size());
-        prediction = prediction.flattened();
-        correct = correct.flattened();
-        int n = correct.shape.size();
-        Float mse;
-        for (int i = 0; i < n; i++) {
-            Float x = prediction[{i}] - correct[{i}];
-            mse = mse + x * x;
-        }
-        mse = mse / (2.0f * n); // division by 2 makes derivative more stable
-        return Tensor(mse);
+        int n = correct.size();
+        assert(prediction.size() == n);
+
+        prediction.flatten();
+        correct.flatten();
+        
+        return Tensor::sum((prediction - correct) * (prediction - correct)) / (2.0f * n);
+    }
+
+    Tensor CrossEntropyLoss::compute(Tensor prediction, Tensor correct) {
+        assert(prediction.shape() == correct.shape());
+        return -Tensor::mean(Tensor::sum(correct * Tensor::log(prediction), 0));
+    }
+
+    Tensor NLLLoss::compute(Tensor prediction, Tensor correct) {
+        assert(prediction.shape() == correct.shape());
+        return -Tensor::mean(Tensor::sum(correct * prediction, 0));
     }
 }

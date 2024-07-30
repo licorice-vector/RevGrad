@@ -1,12 +1,9 @@
-#include <iostream>
-#include <cassert>
-
 #include "Model.h"
 
 namespace RevGrad {
-    std::vector<Float> Model::get_params() {
-        std::vector<Float> params;
-        for (auto param : parameters) {
+    std::vector<Tensor> Model::get_params() {
+        std::vector<Tensor> params;
+        for (auto& param : parameters) {
             params.push_back(param);
         }
         return params;
@@ -16,23 +13,24 @@ namespace RevGrad {
         return forward(x);
     }
 
+    void Model::save_parameters(const std::string& filename) {
+        // TODO
+    }
+
+    void Model::load_parameters(const std::string& filename) {
+        // TODO
+    }
+
     Linear::Linear(Model* parent_model, int in_features, int out_features) 
         : in_features(in_features),
           out_features(out_features),
           weights(Tensor::random(Shape({out_features, in_features}), in_features)), 
-          bias(Tensor::random(Shape({out_features, 1}), in_features))
+          bias(Tensor(Shape({out_features, 1})))
     {
-        for (auto param : weights.data) {
-            parent_model->parameters.push_back(param);
-        }
-        for (auto param : bias.data) {
-            parent_model->parameters.push_back(param);
-        }
+        parent_model->parameters.push_back(weights);
+        parent_model->parameters.push_back(bias);
     }
 
-    /*
-        @param x tensor of shape (features, batch size)
-    */
     Tensor Linear::forward(Tensor x) {
         return Tensor::matmul(weights, x) + bias;
     }
