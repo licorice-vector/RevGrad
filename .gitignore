@@ -1,6 +1,3 @@
-# Ignore all .
-.*
-
 # Ignore the build output directory
 /build/
 /bin/
@@ -37,7 +34,6 @@
 
 # Ignore VSCode settings and workspace storage
 .settings/
-.vscode/
 
 # Ignore system-specific files
 .DS_Store
@@ -48,3 +44,7 @@ Icon
 
 # Ignore notes.txt
 notes.txt
+
+# Ignore specific MNIST data files
+src/examples/data/mnist_test.csv
+src/examples/data/mnist_train.csv
