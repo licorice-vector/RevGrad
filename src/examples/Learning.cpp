@@ -50,6 +50,23 @@ int main() {
 
     NN nn;
     MSE mse;
+
+    bool use_pretrained_weights = false;
+
+    if (use_pretrained_weights) {
+        nn.load_parameters("examples/model_weights/learning_weights.csv");
+
+        Tensor prediction = nn(X);
+        prediction.flatten();
+        Tensor loss = mse(prediction, correct);
+
+        std::cout << "prediction: " << prediction << std::endl;
+        std::cout << "correct: " << correct << std::endl;
+        std::cout << "loss: " << loss.value({0}) << std::endl;
+
+        return 0;
+    }
+
     SGD sgd(nn.get_params(), 0.1);
 
     for (int i = 0; i <= 500; i++) {
@@ -67,6 +84,8 @@ int main() {
             std::cout << "loss: " << loss.value({0}) << std::endl;
         }
     }
+
+    nn.save_parameters("examples/model_weights/learning_weights.csv");
     
     return 0;
 }

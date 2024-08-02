@@ -14,11 +14,44 @@ namespace RevGrad {
     }
 
     void Model::save_parameters(const std::string& filename) {
-        // TODO
+        std::ofstream file(filename);
+        assert(file.is_open());
+        for (const auto& param : parameters) {
+            std::vector<float> values = param.values();
+            int size = (int)values.size();
+            file << size << "\n";
+            for (int i = 0; i < size; i++) {
+                file << values[i];
+                if (i + 1 == size) {
+                    file << "\n";
+                } else {
+                    file << ",";
+                }
+            }
+        }
+        file.close();
     }
 
     void Model::load_parameters(const std::string& filename) {
-        // TODO
+        std::ifstream file(filename);
+        assert(file.is_open());
+        int index = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+            int size = std::stoi(line);
+            assert(size == (int)parameters[index].values().size());
+            assert(std::getline(file, line));
+            std::vector<float> values;
+            std::stringstream ss(line);
+            std::string s;
+            while (std::getline(ss, s, ',')) {
+                values.push_back(std::stof(s));
+            }
+            assert((int)values.size() == size);
+            parameters[index].values() = values;
+            index++;
+        }
+        file.close();
     }
 
     Linear::Linear(Model* parent_model, int in_features, int out_features) 

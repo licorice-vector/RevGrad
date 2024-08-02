@@ -2,6 +2,7 @@
 #define MODEL_H
 
 #include <functional>
+#include <cassert>
 
 #include "../tensor/Tensor.h"
 
