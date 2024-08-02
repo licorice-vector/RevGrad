@@ -1,6 +1,6 @@
 # RevGrad
 
-A small deep learning library built using reverse automatic differentiation.
+A small deep learning (reverse automatic differentiation) library written in C++.
 
 ## Building the Project
 
