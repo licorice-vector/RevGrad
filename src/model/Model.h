@@ -1,5 +1,5 @@
-#ifndef MODEL_H
-#define MODEL_H
+#ifndef REVGRAD_MODEL_H
+#define REVGRAD_MODEL_H
 
 #include <functional>
 #include <cassert>

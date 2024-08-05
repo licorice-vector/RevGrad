@@ -447,17 +447,22 @@ namespace RevGrad {
         }
 
         Tensor matmul(const Tensor& u, const Tensor& v) {
-            Shape shape = Shape({u.shape()[0], v.shape()[1]});
-            Tensor w(shape);
-            for (int i = 0; i < shape[0]; i++) {
-                for (int j = 0; j < shape[1]; j++) {
-                    float sum = 0.0f;
-                    for (int k = 0; k < u.shape()[1]; k++) {
-                        sum += u.values()[i * u.shape()[1] + k] * v.values()[k * v.shape()[1] + j];
+            Shape w_shape = Shape({u.shape()[0], v.shape()[1]});
+            Tensor w(w_shape);
+            std::vector<float> w_values = w.values();
+            std::vector<float> u_values = u.values();
+            std::vector<float> v_values = v.values();
+            Shape u_shape = u.shape();
+            Shape v_shape = v.shape();
+            #pragma omp parallel for
+            for (int i = 0; i < w_shape[0]; i++) {
+                for (int k = 0; k < u_shape[1]; k++) {
+                    for (int j = 0; j < w_shape[1]; j++) {
+                        w_values[i * w_shape[1] + j] += u_values[i * u_shape[1] + k] * v_values[k * v_shape[1] + j];
                     }
-                    w.values()[i * shape[1] + j] = sum;
                 }
             }
+            w.values() = w_values;
             w.add_edge(u), w.add_edge(v);
             return w;
         }
@@ -466,22 +471,31 @@ namespace RevGrad {
             assert((int)w.edges().size() == 2);
             Tensor u = w.edges()[0];
             Tensor v = w.edges()[1];
+            std::vector<float> u_values = u.values();
+            std::vector<float> v_values = v.values();
+            std::vector<float> w_grads = w.grads();
+            std::vector<float> u_grads = u.grads();
+            std::vector<float> v_grads = v.grads();
+            Shape w_shape = w.shape();
             Shape u_shape = u.shape();
             Shape v_shape = v.shape();
-            for (int i = 0; i < w.shape()[0]; i++) {
-                for (int j = 0; j < w.shape()[1]; j++) {
-                    for (int k = 0; k < u_shape[1]; k++) {
-                        u.grads()[i * u_shape[1] + k] += (
-                            w.grads()[i * w.shape()[1] + j] * 
-                            v.values()[k * v_shape[1] + j]
+            #pragma omp parallel for
+            for (int i = 0; i < w_shape[0]; i++) {
+                for (int k = 0; k < u_shape[1]; k++) {
+                    for (int j = 0; j < w_shape[1]; j++) {
+                        u_grads[i * u_shape[1] + k] += (
+                            w_grads[i * w_shape[1] + j] * 
+                            v_values[k * v_shape[1] + j]
                         );
-                        v.grads()[k * v_shape[1] + j] += (
-                            w.grads()[i * w.shape()[1] + j] * 
-                            u.values()[i * u_shape[1] + k]
+                        v_grads[k * v_shape[1] + j] += (
+                            w_grads[i * w_shape[1] + j] * 
+                            u_values[i * u_shape[1] + k]
                         );
                     }
                 }
             }
+            u.grads() = u_grads;
+            v.grads() = v_grads;
         }
     }
 

@@ -1,6 +1,6 @@
 CXX = g++-13
-CXXFLAGS = -std=c++17 -g -O3 -march=native -funroll-loops -ftree-vectorize
-LDFLAGS = -Wl,-ld_classic
+CXXFLAGS = -std=c++17 -g -O3 -march=native -funroll-loops -ftree-vectorize -fopenmp
+LDFLAGS = -Wl,-ld_classic -fopenmp
 
 # Source files for each target
 TENSOR_SOURCES = \

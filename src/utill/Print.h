@@ -1,5 +1,5 @@
-#ifndef PRINT_H
-#define PRINT_H
+#ifndef REVGRAD_PRINT_H
+#define REVGRAD_PRINT_H
 
 #include "../tensor/Tensor.h"
 

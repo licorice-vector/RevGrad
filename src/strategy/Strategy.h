@@ -1,5 +1,5 @@
-#ifndef STRATEGY_H
-#define STRATEGY_H
+#ifndef REVGRAD_STRATEGY_H
+#define REVGRAD_STRATEGY_H
 
 #include "../tensor/Tensor.h"
 

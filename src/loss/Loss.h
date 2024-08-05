@@ -1,5 +1,5 @@
-#ifndef LOSS_H
-#define LOSS_H
+#ifndef REVGRAD_LOSS_H
+#define REVGRAD_LOSS_H
 
 #include "../tensor/Tensor.h"
 

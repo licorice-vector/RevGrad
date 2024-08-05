@@ -1,5 +1,5 @@
-#ifndef TENSOR_H
-#define TENSOR_H
+#ifndef REVGRAD_TENSOR_H
+#define REVGRAD_TENSOR_H
 
 #include <iostream>
 #include <fstream>
@@ -15,6 +15,7 @@
 #include <queue>
 #include <set>
 #include <map>
+#include <omp.h>
 
 namespace RevGrad {
     class Node;
